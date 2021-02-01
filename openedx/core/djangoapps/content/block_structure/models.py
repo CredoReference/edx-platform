@@ -375,6 +375,17 @@ class ApiCourseStructureLock(models.Model):
         ApiCourseStructureLock.objects.filter(course_id=course_id).delete()
 
 
+class ApiBlockInfo(models.Model):
+    course_id = models.CharField(max_length=255, null=False, db_index=True)
+    block_id = models.CharField(max_length=255, null=False, db_index=True)
+    hash_id = models.CharField(max_length=255, null=False, db_index=True)
+    deleted = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = 'api_block_info'
+        unique_together = (('course_id', 'block_id'),)
+
+
 class BlockToSequential(models.Model):
     block_id = models.CharField(max_length=255, db_index=True, null=False, blank=False)
     sequential_id = models.CharField(max_length=255, db_index=True, null=False, blank=False)

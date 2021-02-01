@@ -16,6 +16,7 @@ from lms.djangoapps.grades.api import task_compute_all_grades_for_course
 from openedx.core.djangoapps.credit.signals import on_course_publish
 from openedx.core.lib.gating import api as gating_api
 from openedx.core.djangoapps.content.block_structure.api import clear_course_from_cache
+from openedx.core.djangoapps.content.block_structure.models import ApiBlockInfo
 from track.event_transaction_utils import get_event_transaction_id, get_event_transaction_type
 from util.module_utils import yield_dynamic_descriptor_descendants
 from xmodule.modulestore.django import SignalHandler, modulestore
@@ -99,6 +100,7 @@ def handle_item_deleted(**kwargs):
     if usage_key:
         # Strip branch info
         usage_key = usage_key.for_branch(None)
+        block_info_update_lst = [str(usage_key)]
         course_key = usage_key.course_key
         deleted_module = modulestore().get_item(usage_key)
         for module in yield_dynamic_descriptor_descendants(deleted_module, kwargs.get('user_id')):
@@ -106,6 +108,10 @@ def handle_item_deleted(**kwargs):
             gating_api.remove_prerequisite(module.location)
             # Remove any 'requires' course content milestone relationships
             gating_api.set_required_content(course_key, module.location, None, None, None)
+            block_info_update_lst.append(str(module.location))
+
+        if block_info_update_lst:
+            ApiBlockInfo.objects.filter(block_id__in=block_info_update_lst).update(deleted=True)
 
 
 @receiver(GRADING_POLICY_CHANGED)

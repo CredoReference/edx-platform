@@ -101,6 +101,7 @@ from xmodule.partitions.partitions import UserPartition
 from xmodule.tabs import CourseTab, CourseTabList, InvalidTabsException
 from credo_modules.models import CopyBlockTask, get_inactive_orgs
 from credo_modules.mongo import get_block_versions
+from openedx.core.djangoapps.content.block_structure.models import ApiBlockInfo
 
 from .component import ADVANCED_COMPONENT_TYPES
 from .item import create_xblock_info, copy_to_other_course, copy_unit_to_library, copy_components_to_library
@@ -122,7 +123,7 @@ __all__ = ['course_info_handler', 'course_handler', 'course_listing',
            'course_notifications_handler',
            'textbooks_list_handler', 'textbooks_detail_handler',
            'group_configurations_list_handler', 'group_configurations_detail_handler',
-           'get_versions_list', 'restore_block_version']
+           'get_versions_list', 'restore_block_version', 'get_courses_with_duplicates']
 
 WAFFLE_NAMESPACE = 'studio_home'
 
@@ -724,7 +725,7 @@ def copy_units_to_libraries(request):
                 with transaction.atomic():
                     section_task = CopyBlockTask(
                         task_id=task_id,
-                        block_ids=usage_keys,
+                        block_ids=json.dumps(usage_keys),
                         dst_location=library_key_string
                     )
                     section_task.save()
@@ -799,7 +800,7 @@ def copy_components_to_libraries(request):
                 with transaction.atomic():
                     section_task = CopyBlockTask(
                         task_id=task_id,
-                        block_ids=usage_keys,
+                        block_ids=json.dumps(usage_keys),
                         dst_location=library_key_string
                     )
                     section_task.save()
@@ -2087,3 +2088,35 @@ def _get_course_creator_status(user):
         course_creator_status = 'granted'
 
     return course_creator_status
+
+
+@login_required
+def get_courses_with_duplicates(request, usage_key_string):
+    usage_key = UsageKey.from_string(usage_key_string)
+    course_key = usage_key.course_key
+    result_course_keys = []
+    result = []
+
+    with modulestore().bulk_operations(course_key):
+        src_item = modulestore().get_item(usage_key, depth=1)
+        block_ids = [str(item.location) for item in src_item.get_children()]
+        blocks = ApiBlockInfo.objects.filter(block_id__in=block_ids, deleted=False)
+        block_hashes = [bl.hash_id for bl in blocks]
+        if block_hashes:
+            courses = ApiBlockInfo.objects.filter(hash_id__in=block_hashes, deleted=False)\
+                .exclude(course_id=str(usage_key.course_key)).values('course_id').distinct()
+            for course in courses:
+                tmp_course_key = CourseKey.from_string(course['course_id'])
+                if has_studio_write_access(request.user, tmp_course_key):
+                    result_course_keys.append(tmp_course_key)
+    if result_course_keys:
+        co_data = CourseOverview.objects.filter(id__in=result_course_keys).order_by('display_name')
+        for co_item in co_data:
+            result.append({
+                'id': str(co_item.id),
+                'display_name': co_item.display_name,
+                'org': co_item.id.org,
+                'course': co_item.id.course,
+                'run': co_item.id.run
+            })
+    return JsonResponse({'data': result})
