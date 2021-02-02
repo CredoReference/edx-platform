@@ -762,10 +762,10 @@ def _save_xblock(user, xblock, data=None, children_strings=None, metadata=None, 
                             )
                             copy_task.save()
                             update_res.append((copy_task.id, related_course_id, course_version))
-                transaction.on_commit(lambda: update_block_in_related_course.delay(
-                    task_id, str(xblock.location), rel_course_id, course_version == 'publish')
-                                      for task_id, rel_course_id, course_version in update_res)
-                result['update_related_task_id'] = task_uuid
+                transaction.on_commit(lambda: [update_block_in_related_course.delay(
+                    task_id, str(xblock.location), rel_course_id, rel_course_version == 'publish', user.id)
+                                      for task_id, rel_course_id, rel_course_version in update_res])
+                result['update_related_courses_task_id'] = task_uuid
 
         # Note that children aren't being returned until we have a use case.
         return JsonResponse(result, encoder=EdxJSONEncoder)
@@ -1954,7 +1954,7 @@ def update_block_in_related_course(task_id, usage_id, dst_course_id, need_publis
         copy_task.save()
 
         usage_key = UsageKey.from_string(usage_id)
-        course_course_key = CourseKey.from_string(usage_key.course_key)
+        course_course_key = usage_key.course_key
         dst_course_key = CourseKey.from_string(dst_course_id)
 
         course_id = str(course_course_key)
@@ -1964,7 +1964,7 @@ def update_block_in_related_course(task_id, usage_id, dst_course_id, need_publis
         with store.bulk_operations(course_course_key):
             item = modulestore().get_item(usage_key, depth=1)
             for child in item.get_children():
-                src_block_info = ApiBlockInfo.objects.filter(block_id=usage_id, course_id=course_id,
+                src_block_info = ApiBlockInfo.objects.filter(block_id=str(child.location), course_id=course_id,
                                                              deleted=False).first()
                 if src_block_info:
                     dst_block_info = ApiBlockInfo.objects.filter(
@@ -1974,12 +1974,13 @@ def update_block_in_related_course(task_id, usage_id, dst_course_id, need_publis
 
         parent_locations = []
 
-        with modulestore().bulk_operations(dst_course_key):
+        with store.bulk_operations(dst_course_key):
             for block_id, src_block in items_to_update.items():
                 dst_block = _copy_fileds_from_one_xblock_to_other(store, src_block, block_id, user)
-                parent_dst_block = str(dst_block.get_parent())
-                if parent_dst_block not in parent_locations:
-                    parent_locations.append(parent_dst_block)
+                parent_dst_block = dst_block.get_parent()
+                parent_dst_block_usage_id = str(parent_dst_block.location)
+                if parent_dst_block_usage_id not in parent_locations:
+                    parent_locations.append(parent_dst_block_usage_id)
 
         if need_publish:
             for parent_dst_block in parent_locations:
@@ -1987,7 +1988,8 @@ def update_block_in_related_course(task_id, usage_id, dst_course_id, need_publis
 
         copy_task.set_finished()
         copy_task.save()
-    except:
+    except Exception as e:
+        log.exception(e)
         copy_task.set_error()
         copy_task.save()
         raise
